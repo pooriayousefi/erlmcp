@@ -106,7 +106,7 @@ erlmcp_server  ◄──  erlmcp_http_handler / stdio reader
 
 ```bash
 rebar3 compile
-rebar3 eunit          # once you add the test suite
+rebar3 eunit
 ```
 
 ## License
