@@ -30,7 +30,8 @@
 -export([
     start_link/0,
     execute_tool/2,
-    execute_tool/3
+    execute_tool/3,
+    execute_tool/4
 ]).
 
 -export([
@@ -52,13 +53,19 @@ execute_tool(Name, Arguments) ->
 
 execute_tool(Name, Arguments, Timeout)
   when is_integer(Timeout), Timeout > 0 ->
-    gen_server:call(
-        ?MODULE,
-        {execute_tool, Name, Arguments, Timeout},
-        Timeout + 5000
-    );
+    execute_tool(Name, Arguments, Timeout, #{});
 execute_tool(_Name, _Arguments, _Timeout) ->
     {error, invalid_timeout}.
+
+execute_tool(Name, Arguments, Timeout, Context)
+  when is_integer(Timeout), Timeout > 0, is_map(Context) ->
+    gen_server:call(
+        ?MODULE,
+        {execute_tool, Name, Arguments, Timeout, Context},
+        Timeout + 5000
+    );
+execute_tool(_Name, _Arguments, _Timeout, _Context) ->
+    {error, invalid_options}.
 
 init([]) ->
     {ok, #{}}.
@@ -71,13 +78,15 @@ handle_call(
     {reply, {error, invalid_arguments}, State};
 
 handle_call(
-    {execute_tool, Name, Arguments, Timeout},
+    {execute_tool, Name, Arguments, Timeout, Context},
     From,
     State
 ) ->
     case lookup_handler(Name) of
         {ok, Handler} ->
-            start_execution(Handler, Arguments, Timeout, From, State);
+            start_execution(
+                Handler, Arguments, Context, Timeout, From, State
+            );
         {error, Reason} ->
             {reply, {error, Reason}, State}
     end;
@@ -156,7 +165,9 @@ lookup_handler(Name) ->
     try erlmcp_tool_registry:get_tool(Name) of
         {ok, Tool} ->
             case maps:find(handler, Tool) of
-                {ok, Handler} when is_function(Handler, 1) ->
+                {ok, Handler}
+                        when is_function(Handler, 1) orelse
+                             is_function(Handler, 2) ->
                     {ok, Handler};
                 _ ->
                     {error, invalid_tool_handler}
@@ -170,13 +181,13 @@ lookup_handler(Name) ->
             {error, registry_unavailable}
     end.
 
-start_execution(Handler, Arguments, Timeout, From, State) ->
+start_execution(Handler, Arguments, Context, Timeout, From, State) ->
     Ref = make_ref(),
     Parent = self(),
 
     {Pid, Monitor} = spawn_monitor(
         fun() ->
-            Result = run_handler(Handler, Arguments),
+            Result = run_handler(Handler, Arguments, Context),
             Parent ! {tool_result, Ref, Result}
         end
     ),
@@ -196,14 +207,21 @@ start_execution(Handler, Arguments, Timeout, From, State) ->
 
     {noreply, State#{Ref => Execution}}.
 
-run_handler(Handler, Arguments) ->
-    try Handler(Arguments) of
+run_handler(Handler, Arguments, Context) ->
+    try invoke_handler(Handler, Arguments, Context) of
         Result ->
             {ok, Result}
     catch
         Class:Reason ->
             {error, {execution_failed, Class, Reason}}
     end.
+
+invoke_handler(Handler, Arguments, _Context)
+        when is_function(Handler, 1) ->
+    Handler(Arguments);
+invoke_handler(Handler, Arguments, Context)
+        when is_function(Handler, 2) ->
+    Handler(Arguments, Context).
 
 find_execution(Monitor, State) ->
     case lists:search(
