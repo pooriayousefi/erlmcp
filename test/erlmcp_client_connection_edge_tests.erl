@@ -28,22 +28,11 @@ invalid_max_pending_test() ->
         cleanup(fun() -> exit(Transport, kill) end)
     end.
 
-%% gen_server:start_link/3 links the caller to the child before init/1
-%% rejects its options. Trap and consume that expected EXIT signal so an
-%% intentional startup failure does not terminate the EUnit test process.
+%% gen_server:start_link/3 reports an init failure as {error, Reason}.
+%% OTP removes the temporary link when startup fails, so no EXIT signal
+%% should be expected by the caller.
 start_with_invalid_options(Transport, Options) ->
-    PreviousTrapExit = process_flag(trap_exit, true),
-    try
-        Result = erlmcp_client_connection:start_link(Transport, Options),
-        receive
-            {'EXIT', _Pid, invalid_options} ->
-                Result
-        after 1000 ->
-            ?assert(false)
-        end
-    after
-        process_flag(trap_exit, PreviousTrapExit)
-    end.
+    erlmcp_client_connection:start_link(Transport, Options).
 
 invalid_request_test() ->
     with_connection(fun(Connection, _Transport) ->
