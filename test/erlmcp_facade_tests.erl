@@ -39,7 +39,8 @@ registry_facade_test_() ->
                 ?assertEqual(
                     {ok, [#{
                         <<"name">> := <<"facade_echo">>,
-                        <<"description">> := <<"Echo">>
+                        <<"description">> := <<"Echo">>,
+                        <<"inputSchema">> := #{<<"type">> := <<"object">>}
                     }]},
                     erlmcp:list_tools()
                 ),
