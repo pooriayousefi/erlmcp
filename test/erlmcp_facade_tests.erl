@@ -25,7 +25,7 @@ registry_facade_test_() ->
             Registry
         end,
         fun(Registry) ->
-            catch gen_server:stop(Registry)
+            try gen_server:stop(Registry) catch _:_ -> ok end
         end,
         fun(_Registry) ->
             ?_test(begin
@@ -38,9 +38,9 @@ registry_facade_test_() ->
                 ?assertEqual(ok, erlmcp:register_tool(Tool)),
                 ?assertEqual(
                     {ok, [#{
-                        <<"name">> := <<"facade_echo">>,
-                        <<"description">> := <<"Echo">>,
-                        <<"inputSchema">> := #{<<"type">> := <<"object">>}
+                        <<"name">> => <<"facade_echo">>,
+                        <<"description">> => <<"Echo">>,
+                        <<"inputSchema">> => #{<<"type">> => <<"object">>}
                     }]},
                     erlmcp:list_tools()
                 ),
