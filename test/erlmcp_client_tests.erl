@@ -399,7 +399,7 @@ call_tool_end_to_end_multi_round_trip_test() ->
                 end
             end,
             fun(Connection) ->
-                InputHandler = fun(Requests, Context) ->
+                InputHandler = fun(_Requests, Context) ->
                     ?assertEqual(1, maps:get(round, Context)),
                     ?assertEqual(<<"server-state-42">>,
                                  maps:get(request_state, Context)),
