@@ -366,6 +366,69 @@ call_tool_input_handler_completes_round_trip_test() ->
         end
     ).
 
+call_tool_end_to_end_multi_round_trip_test() ->
+    with_server_services(fun() ->
+        Parent = self(),
+        ok = erlmcp_tool_registry:register_tool(#{
+            name => <<"approval_tool">>,
+            input_schema => #{<<"type">> => <<"object">>},
+            handler => fun(_Arguments, Context) ->
+                case maps:get(input_responses, Context, []) of
+                    [] ->
+                        #{
+                            result_type => input_required,
+                            input_requests => [
+                                #{<<"id">> => <<"approve">>,
+                                  <<"message">> => <<"Approve operation">>}
+                            ],
+                            request_state => <<"server-state-42">>
+                        };
+                    [#{<<"id">> := <<"approve">>,
+                       <<"value">> := true}] ->
+                        Parent ! {server_received_state,
+                                  maps:get(request_state, Context)},
+                        <<"operation approved">>
+                end
+            end
+        }),
+        with_connection(
+            fun(Request) ->
+                case erlmcp_server:handle_message(Request) of
+                    {ok, Response} -> Response;
+                    Other -> erlang:error({unexpected_server_result, Other})
+                end
+            end,
+            fun(Connection) ->
+                InputHandler = fun(Requests, Context) ->
+                    ?assertEqual(1, maps:get(round, Context)),
+                    ?assertEqual(<<"server-state-42">>,
+                                 maps:get(request_state, Context)),
+                    {ok, [
+                        #{<<"id">> => <<"approve">>, <<"value">> => true}
+                    ]}
+                end,
+                ?assertMatch(
+                    {ok, #{
+                        <<"resultType">> := <<"complete">>,
+                        <<"isError">> := false,
+                        <<"content">> := [
+                            #{<<"text">> := <<"operation approved">>}
+                        ]
+                    }},
+                    erlmcp_client:call_tool(
+                        Connection, <<"approval_tool">>, #{},
+                        #{input_handler => InputHandler}
+                    )
+                ),
+                receive
+                    {server_received_state, State} ->
+                        ?assertEqual(<<"server-state-42">>, State)
+                after 1000 -> ?assert(false)
+                end
+            end
+        )
+    end).
+
 call_tool_input_handler_error_test() ->
     InputRequired = #{
         <<"resultType">> => <<"input_required">>,
@@ -459,6 +522,18 @@ invalid_jsonrpc_response_test() ->
 %%--------------------------------------------------------------------
 %% Test-only connection process
 %%--------------------------------------------------------------------
+
+with_server_services(Test) ->
+    {ok, Registry} = erlmcp_tool_registry:start_link(),
+    unlink(Registry),
+    {ok, Executor} = erlmcp_tool_executor:start_link(),
+    unlink(Executor),
+    try
+        Test()
+    after
+        catch gen_server:stop(Executor),
+        catch gen_server:stop(Registry)
+    end.
 
 with_connection(ResponseFun, TestFun) ->
     {ok, Connection} = gen_server:start_link(
