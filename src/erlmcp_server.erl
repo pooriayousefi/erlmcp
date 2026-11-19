@@ -264,8 +264,8 @@ handle_tools_list(Id) ->
 
 handle_tools_call(Id, Params) ->
     case validate_tool_call_params(Params) of
-        {ok, Name, Arguments} ->
-            execute_tool_call(Id, Name, Arguments);
+        {ok, Name, Arguments, Context} ->
+            execute_tool_call(Id, Name, Arguments, Context);
 
         {error, Reason} ->
             {ok, jsonrpc_error(
@@ -279,21 +279,38 @@ handle_tools_call(Id, Params) ->
 validate_tool_call_params(Params) ->
     Name = maps:get(<<"name">>, Params, undefined),
     Arguments = maps:get(<<"arguments">>, Params, #{}),
+    InputResponses = maps:get(<<"inputResponses">>, Params, undefined),
+    RequestState = maps:get(<<"requestState">>, Params, undefined),
 
     case is_nonempty_binary(Name) of
         false ->
             {error, invalid_tool_name};
-
         true when not is_map(Arguments) ->
             {error, invalid_arguments};
-
+        true when InputResponses =/= undefined,
+                  not is_list(InputResponses) ->
+            {error, invalid_input_responses};
+        true when RequestState =/= undefined,
+                  not is_binary(RequestState) ->
+            {error, invalid_request_state};
         true ->
-            {ok, Name, Arguments}
+            Context0 = #{},
+            Context1 = case InputResponses of
+                undefined -> Context0;
+                _ -> Context0#{input_responses => InputResponses}
+            end,
+            Context = case RequestState of
+                undefined -> Context1;
+                _ -> Context1#{request_state => RequestState}
+            end,
+            {ok, Name, Arguments, Context}
     end.
 
-execute_tool_call(Id, Name, Arguments) ->
+execute_tool_call(Id, Name, Arguments, Context) ->
     case safe_executor_call(
-        fun() -> erlmcp_tool_executor:execute_tool(Name, Arguments) end
+        fun() -> erlmcp_tool_executor:execute_tool(
+            Name, Arguments, 30000, Context
+        ) end
     ) of
         {ok, ToolResult} ->
             {ok, tool_success_response(Id, ToolResult)};
@@ -314,9 +331,19 @@ tool_success_response(Id, ToolResult) ->
             Result = erlmcp_protocol:tools_call_result(ResultFields),
             erlmcp_jsonrpc:response(Id, Result);
 
+        {input_required, ResultFields} ->
+            Result = erlmcp_protocol:input_required_result(ResultFields),
+            erlmcp_jsonrpc:response(Id, Result);
+
         {error, Reason} ->
             tool_failure_response(Id, Reason)
     end.
+
+normalize_tool_result(#{result_type := input_required} = Result) ->
+    normalize_input_required_result(Result);
+
+normalize_tool_result(#{<<"resultType">> := <<"input_required">>} = Result) ->
+    normalize_input_required_result(Result);
 
 normalize_tool_result(#{content := Content} = Result)
         when is_list(Content) ->
@@ -343,6 +370,35 @@ normalize_tool_result(#{<<"content">> := Content} = Result)
         ),
         meta => maps:get(<<"_meta">>, Result, #{})
     }};
+
+normalize_input_required_result(Result) ->
+    InputRequests = maps:get(
+        input_requests,
+        Result,
+        maps:get(<<"inputRequests">>, Result, undefined)
+    ),
+    RequestState = maps:get(
+        request_state,
+        Result,
+        maps:get(<<"requestState">>, Result, undefined)
+    ),
+    case (InputRequests =:= undefined orelse is_list(InputRequests)) andalso
+         (RequestState =:= undefined orelse is_binary(RequestState)) andalso
+         (InputRequests =/= undefined orelse RequestState =/= undefined) of
+        true ->
+            Fields0 = #{},
+            Fields1 = case InputRequests of
+                undefined -> Fields0;
+                _ -> Fields0#{input_requests => InputRequests}
+            end,
+            Fields2 = case RequestState of
+                undefined -> Fields1;
+                _ -> Fields1#{request_state => RequestState}
+            end,
+            {input_required, Fields2};
+        false ->
+            {error, invalid_input_required_result}
+    end.
 
 normalize_tool_result(Binary) when is_binary(Binary) ->
     {ok, #{

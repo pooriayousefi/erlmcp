@@ -19,6 +19,32 @@ execute_tool_test() ->
         )
     end).
 
+execute_contextual_handler_test() ->
+    with_services(fun() ->
+        Parent = self(),
+        ok = register_test_tool(
+            fun(Arguments, Context) ->
+                Parent ! {received_context, Arguments, Context},
+                maps:get(input_responses, Context)
+            end
+        ),
+        Responses = [#{<<"value">> => true}],
+        Context = #{
+            input_responses => Responses,
+            request_state => <<"opaque">>
+        },
+        ?assertEqual(
+            {ok, Responses},
+            erlmcp_tool_executor:execute_tool(
+                <<"test_tool">>, #{<<"x">> => 1}, 1000, Context
+            )
+        ),
+        receive
+            {received_context, #{<<"x">> := 1}, Context} -> ok
+        after 1000 -> ?assert(false)
+        end
+    end).
+
 unknown_tool_test() ->
     with_services(fun() ->
         ?assertEqual(

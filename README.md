@@ -99,14 +99,17 @@ erlmcp_server  ◄──  erlmcp_http_handler / stdio reader
 - No `initialize` handshake and no protocol-level sessions.
 - Every request carries `io.modelcontextprotocol/protocolVersion`, client capabilities and (optionally) client info inside `params._meta`.
 - `server/discover` is the recommended first call.
-- Multi-round-trip requests return `resultType: "input_required"`; the client retries with `inputResponses` / `requestState`.
+- Multi-round-trip requests return `resultType: "input_required"`. Automatic continuation is opt-in through the client's `input_handler` option; without it, the `input_required` result is returned to the application.
+- The input handler is a function of arity 2: `fun(InputRequests, Context) -> {ok, InputResponses} | {error, Reason} end`. The context contains `tool_name`, original `arguments`, opaque `request_state`, and 1-based `round`. The client repeats the original tool call with `inputResponses` and the returned `requestState`, using a new JSON-RPC ID for each exchange.
+- `call_tool/4` accepts `timeout` (the deadline shared by request/response exchanges across rounds), `max_input_rounds` (default 5), and `input_handler`. The callback runs synchronously in the calling process and should return promptly; callback exceptions, invalid callback results, and callback errors are returned as explicit client errors.
+- Server tool handlers may use arity 1 (existing behavior) or arity 2. An arity-2 handler receives `fun(Arguments, Context)`; the context contains `input_responses` and/or `request_state` on continuation calls. To request more input, return `#{result_type => input_required, input_requests => Requests, request_state => OpaqueBinary}` (either `input_requests` or `request_state` is required).
 - Streamable HTTP requires `MCP-Protocol-Version` and `Mcp-Method` headers (plus `Mcp-Name` for `tools/call`).
 
 ## Building & testing
 
 ```bash
 rebar3 compile
-rebar3 eunit          # once you add the test suite
+rebar3 eunit
 ```
 
 ## License

@@ -107,7 +107,9 @@ start_http_client(Url, Options)
             end;
         {error, _} = Error ->
             Error
-    end.
+    end;
+start_http_client(_Url, _Options) ->
+    {error, invalid_options}.
 
 %%--------------------------------------------------------------------
 %% Server-side tool registry helpers

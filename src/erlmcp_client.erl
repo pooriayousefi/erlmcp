@@ -108,32 +108,144 @@ call_tool(Connection, Name, Arguments) ->
 call_tool(Connection, Name, Arguments, Options)
         when is_binary(Name), byte_size(Name) > 0,
              is_map(Arguments), is_map(Options) ->
-    Id = new_request_id(),
-
-    RequestOptions = #{
-        id => Id,
-        name => Name,
-        arguments => Arguments
-    },
-
-    RequestOptionsWithOptionalFields =
-        add_optional_call_fields(RequestOptions, Options),
-
-    Request = erlmcp_protocol:tools_call_request(
-        RequestOptionsWithOptionalFields
-    ),
-
     Timeout = maps:get(timeout, Options, ?DEFAULT_TIMEOUT),
+    MaxRounds = maps:get(max_input_rounds, Options, 5),
+    InputHandler = maps:get(input_handler, Options, undefined),
 
-    case send_request(Connection, Request, Timeout) of
-        {ok, Result} ->
-            validate_tool_call_result(Result);
-        Error ->
-            Error
+    case valid_timeout(Timeout) andalso
+         is_integer(MaxRounds) andalso MaxRounds > 0 andalso
+         valid_input_handler(InputHandler) of
+        false ->
+            {error, invalid_options};
+        true ->
+            Deadline = make_deadline(Timeout),
+            InitialFields = add_optional_call_fields(#{}, Options),
+            call_tool_round(
+                Connection,
+                Name,
+                Arguments,
+                Options,
+                InitialFields,
+                Deadline,
+                MaxRounds,
+                0
+            )
     end;
 
 call_tool(_Connection, _Name, _Arguments, _Options) ->
     {error, invalid_arguments}.
+
+%%--------------------------------------------------------------------
+%% Multi-round-trip tool invocation
+%%--------------------------------------------------------------------
+
+call_tool_round(
+    Connection,
+    Name,
+    Arguments,
+    Options,
+    OptionalFields,
+    Deadline,
+    MaxRounds,
+    Round
+) ->
+    case remaining_timeout(Deadline) of
+        timeout ->
+            {error, timeout};
+        Timeout ->
+            RequestOptions = maps:merge(
+                #{
+                    id => new_request_id(),
+                    name => Name,
+                    arguments => Arguments
+                },
+                OptionalFields
+            ),
+            Request = erlmcp_protocol:tools_call_request(RequestOptions),
+            case send_request(Connection, Request, Timeout) of
+                {ok, Result} ->
+                    case validate_tool_call_result(Result) of
+                        {ok, #{<<"resultType">> := <<"input_required">>}} ->
+                            maybe_resolve_input(
+                                Connection, Name, Arguments, Options,
+                                OptionalFields, Result, Deadline,
+                                MaxRounds, Round
+                            );
+                        Other ->
+                            Other
+                    end;
+                Error ->
+                    Error
+            end
+    end.
+
+maybe_resolve_input(
+    Connection, Name, Arguments, Options, OptionalFields, Result,
+    Deadline, MaxRounds, Round
+) ->
+    case maps:get(input_handler, Options, undefined) of
+        undefined ->
+            {ok, Result};
+        _Handler when Round >= MaxRounds ->
+            {error, max_input_rounds_exceeded};
+        Handler ->
+            InputRequests = maps:get(<<"inputRequests">>, Result, []),
+            RequestState = maps:get(<<"requestState">>, Result, undefined),
+            Context = #{
+                tool_name => Name,
+                arguments => Arguments,
+                request_state => RequestState,
+                round => Round + 1
+            },
+            case invoke_input_handler(Handler, InputRequests, Context) of
+                {ok, InputResponses} ->
+                    NextFields0 = OptionalFields#{
+                        input_responses => InputResponses
+                    },
+                    NextFields = case RequestState of
+                        undefined -> maps:remove(request_state, NextFields0);
+                        _ -> NextFields0#{request_state => RequestState}
+                    end,
+                    call_tool_round(
+                        Connection, Name, Arguments, Options, NextFields,
+                        Deadline, MaxRounds, Round + 1
+                    );
+                {error, Reason} ->
+                    {error, {input_handler_error, Reason}}
+            end
+    end.
+
+invoke_input_handler(Handler, InputRequests, Context) ->
+    try Handler(InputRequests, Context) of
+        {ok, Responses} when is_list(Responses) ->
+            {ok, Responses};
+        {error, _Reason} = Error ->
+            Error;
+        Other ->
+            {error, {invalid_input_handler_result, Other}}
+    catch
+        Class:Reason ->
+            {error, {input_handler_failed, Class, Reason}}
+    end.
+
+valid_input_handler(undefined) ->
+    true;
+valid_input_handler(Handler) ->
+    is_function(Handler, 2).
+
+make_deadline(infinity) ->
+    infinity;
+make_deadline(Timeout) ->
+    erlang:monotonic_time(millisecond) + Timeout.
+
+remaining_timeout(infinity) ->
+    infinity;
+remaining_timeout(Deadline) ->
+    Remaining = Deadline - erlang:monotonic_time(millisecond),
+    case Remaining > 0 of
+        true -> Remaining;
+        false -> timeout
+    end.
 
 %%--------------------------------------------------------------------
 %% Request/response exchange
@@ -321,21 +433,20 @@ validate_complete_tool_result(Result) ->
     end.
 
 validate_input_required_result(Result) ->
-    HasRequests = maps:is_key(<<"inputRequests">>, Result),
-    HasState = maps:is_key(<<"requestState">>, Result),
+    InputRequests = maps:get(<<"inputRequests">>, Result, undefined),
+    RequestState = maps:get(<<"requestState">>, Result, undefined),
 
-    case HasRequests orelse HasState of
-        false ->
-            {error, invalid_input_required_result};
+    ValidRequests = InputRequests =:= undefined orelse
+                    is_list(InputRequests),
+    ValidState = RequestState =:= undefined orelse
+                 is_binary(RequestState),
+
+    case ValidRequests andalso ValidState andalso
+         (InputRequests =/= undefined orelse RequestState =/= undefined) of
         true ->
-            case maps:find(<<"inputRequests">>, Result) of
-                error ->
-                    {ok, Result};
-                {ok, Requests} when is_list(Requests) ->
-                    {ok, Result};
-                {ok, _} ->
-                    {error, invalid_input_required_result}
-            end
+            {ok, Result};
+        false ->
+            {error, invalid_input_required_result}
     end.
 
 %%--------------------------------------------------------------------

@@ -221,6 +221,80 @@ tools_call_unknown_tool_test_() ->
         end
     }.
 
+tools_call_handler_receives_input_context_test_() ->
+    {setup,
+        fun start_services/0,
+        fun stop_services/1,
+        fun(_Services) ->
+            ?_test(begin
+                Parent = self(),
+                ok = erlmcp_tool_registry:register_tool(#{
+                    name => <<"interactive">>,
+                    input_schema => #{<<"type">> => <<"object">>},
+                    handler => fun(_Arguments, Context) ->
+                        Parent ! {handler_context, Context},
+                        case maps:get(input_responses, Context, []) of
+                            [] ->
+                                #{
+                                    result_type => input_required,
+                                    input_requests => [
+                                        #{<<"id">> => <<"approval">>}
+                                    ],
+                                    request_state => <<"opaque-1">>
+                                };
+                            [#{<<"value">> := true}] ->
+                                <<"approved">>
+                        end
+                    end
+                }),
+                FirstParams = (valid_params())#{
+                    <<"name">> => <<"interactive">>,
+                    <<"arguments">> => #{}
+                },
+                {ok, FirstResponse} = erlmcp_server:handle_message(
+                    request(30, <<"tools/call">>, FirstParams)
+                ),
+                FirstResult = maps:get(<<"result">>, FirstResponse),
+                ?assertEqual(<<"input_required">>,
+                             maps:get(<<"resultType">>, FirstResult)),
+                ?assertEqual(<<"opaque-1">>,
+                             maps:get(<<"requestState">>, FirstResult)),
+                SecondParams = FirstParams#{
+                    <<"inputResponses">> => [
+                        #{<<"id">> => <<"approval">>, <<"value">> => true}
+                    ],
+                    <<"requestState">> => <<"opaque-1">>
+                },
+                {ok, SecondResponse} = erlmcp_server:handle_message(
+                    request(31, <<"tools/call">>, SecondParams)
+                ),
+                ?assertMatch(
+                    #{<<"result">> := #{
+                        <<"resultType">> := <<"complete">>,
+                        <<"isError">> := false
+                    }},
+                    SecondResponse
+                ),
+                receive
+                    {handler_context, Context1} ->
+                        ?assertEqual(#{}, Context1)
+                after 1000 -> ?assert(false)
+                end,
+                receive
+                    {handler_context, Context2} ->
+                        ?assertEqual(
+                            [#{<<"id">> => <<"approval">>,
+                               <<"value">> => true}],
+                            maps:get(input_responses, Context2)
+                        ),
+                        ?assertEqual(<<"opaque-1">>,
+                                     maps:get(request_state, Context2))
+                after 1000 -> ?assert(false)
+                end
+            end)
+        end
+    }.
+
 tools_call_invalid_params_test() ->
     Params = (valid_params())#{
         <<"name">> => 42,
