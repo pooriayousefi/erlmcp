@@ -339,13 +339,14 @@ call_tool_input_handler_completes_round_trip_test() ->
                     #{input_handler => Handler}
                 )
             ),
-            receive
+            FirstId = receive
                 {round_trip_request, 1, First} ->
                     FirstParams = maps:get(<<"params">>, First),
-                    ?assertNot(maps:is_key(<<"inputResponses">>, FirstParams))
+                    ?assertNot(maps:is_key(<<"inputResponses">>, FirstParams)),
+                    maps:get(<<"id">>, First)
             after 1000 -> ?assert(false)
             end,
-            receive
+            SecondId = receive
                 {round_trip_request, 2, Second} ->
                     SecondParams = maps:get(<<"params">>, Second),
                     ?assertEqual(#{<<"x">> => 1},
@@ -358,9 +359,10 @@ call_tool_input_handler_completes_round_trip_test() ->
                         <<"state-round-1">>,
                         maps:get(<<"requestState">>, SecondParams)
                     ),
-                    ?assert(is_integer(maps:get(<<"id">>, Second)))
+                    maps:get(<<"id">>, Second)
             after 1000 -> ?assert(false)
-            end
+            end,
+            ?assertNotEqual(FirstId, SecondId)
         end
     ).
 
