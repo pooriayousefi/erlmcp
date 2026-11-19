@@ -87,8 +87,8 @@ with_pending_request(Test) ->
     end,
     try Test(Connection, Transport, Caller)
     after
-        catch erlmcp_client_connection:stop(Connection),
-        catch exit(Transport, kill)
+        cleanup(fun() -> erlmcp_client_connection:stop(Connection) end),
+        cleanup(fun() -> exit(Transport, kill) end)
     end.
 
 with_connection(Test) ->
@@ -99,6 +99,9 @@ with_connection(Test) ->
         catch erlmcp_client_connection:stop(Connection),
         catch exit(Transport, kill)
     end.
+
+cleanup(Fun) ->
+    try Fun() catch _:_ -> ok end.
 
 start_transport() ->
     Parent = self(),
