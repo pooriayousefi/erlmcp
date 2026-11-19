@@ -28,11 +28,23 @@ invalid_max_pending_test() ->
         cleanup(fun() -> exit(Transport, kill) end)
     end.
 
-%% gen_server:start_link/3 reports an init failure as {error, Reason}.
-%% OTP removes the temporary link when startup fails, so no EXIT signal
-%% should be expected by the caller.
+%% A failed start_link/3 can deliver the failed child's EXIT signal to
+%% its caller. Isolate the call in a process that traps exits so the
+%% EUnit process is never exposed to that expected startup failure.
 start_with_invalid_options(Transport, Options) ->
-    erlmcp_client_connection:start_link(Transport, Options).
+    Parent = self(),
+    Ref = make_ref(),
+    _Pid = spawn(fun() ->
+        process_flag(trap_exit, true),
+        Result = erlmcp_client_connection:start_link(Transport, Options),
+        Parent ! {Ref, Result}
+    end),
+    receive
+        {Ref, Result} ->
+            Result
+    after 1000 ->
+        {error, test_start_timeout}
+    end.
 
 invalid_request_test() ->
     with_connection(fun(Connection, _Transport) ->
