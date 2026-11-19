@@ -71,7 +71,7 @@ init([]) ->
     {ok, #{}}.
 
 handle_call(
-    {execute_tool, _Name, Arguments, _Timeout},
+    {execute_tool, _Name, Arguments, _Timeout, _Context},
     _From,
     State
 ) when not is_map(Arguments) ->
