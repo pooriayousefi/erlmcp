@@ -96,8 +96,8 @@ with_connection(Test) ->
     {ok, Connection} = erlmcp_client_connection:start_link(Transport, #{}),
     try Test(Connection, Transport)
     after
-        catch erlmcp_client_connection:stop(Connection),
-        catch exit(Transport, kill)
+        cleanup(fun() -> erlmcp_client_connection:stop(Connection) end),
+        cleanup(fun() -> exit(Transport, kill) end)
     end.
 
 cleanup(Fun) ->
