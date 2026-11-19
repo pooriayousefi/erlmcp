@@ -433,21 +433,20 @@ validate_complete_tool_result(Result) ->
     end.
 
 validate_input_required_result(Result) ->
-    HasRequests = maps:is_key(<<"inputRequests">>, Result),
-    HasState = maps:is_key(<<"requestState">>, Result),
+    InputRequests = maps:get(<<"inputRequests">>, Result, undefined),
+    RequestState = maps:get(<<"requestState">>, Result, undefined),
 
-    case HasRequests orelse HasState of
-        false ->
-            {error, invalid_input_required_result};
+    ValidRequests = InputRequests =:= undefined orelse
+                    is_list(InputRequests),
+    ValidState = RequestState =:= undefined orelse
+                 is_binary(RequestState),
+
+    case ValidRequests andalso ValidState andalso
+         (InputRequests =/= undefined orelse RequestState =/= undefined) of
         true ->
-            case maps:find(<<"inputRequests">>, Result) of
-                error ->
-                    {ok, Result};
-                {ok, Requests} when is_list(Requests) ->
-                    {ok, Result};
-                {ok, _} ->
-                    {error, invalid_input_required_result}
-            end
+            {ok, Result};
+        false ->
+            {error, invalid_input_required_result}
     end.
 
 %%--------------------------------------------------------------------
