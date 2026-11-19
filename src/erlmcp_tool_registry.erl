@@ -197,7 +197,8 @@ validate_input_schema(Tool) ->
 
 validate_handler(Tool) ->
     case maps:find(handler, Tool) of
-        {ok, Handler} when is_function(Handler, 1) ->
+        {ok, Handler}
+          when is_function(Handler, 1) orelse is_function(Handler, 2) ->
             ok;
         {ok, _Handler} ->
             {error, invalid_tool_handler};
