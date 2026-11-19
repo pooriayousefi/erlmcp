@@ -10,10 +10,7 @@ protocol_version_test() ->
     ?assertEqual(<<"2026-07-28">>, erlmcp:protocol_version()).
 
 start_http_client_rejects_invalid_url_test() ->
-    ?assertEqual(
-        {error, invalid_url},
-        erlmcp:start_http_client(<<>>)
-    ).
+    ?assertEqual({error, invalid_url}, erlmcp:start_http_client(<<>>)).
 
 start_http_client_rejects_invalid_options_test() ->
     ?assertEqual(
@@ -54,9 +51,15 @@ registry_facade_test_() ->
 
 application_callback_test() ->
     {ok, Supervisor} = erlmcp_app:start(normal, []),
+    Monitor = erlang:monitor(process, Supervisor),
     ?assert(is_process_alive(Supervisor)),
     ?assertEqual(ok, erlmcp_app:stop([])),
-    exit(Supervisor, shutdown).
+    exit(Supervisor, shutdown),
+    receive
+        {'DOWN', Monitor, process, Supervisor, _Reason} -> ok
+    after 1000 ->
+        ?assert(false)
+    end.
 
 supervisor_children_test() ->
     {ok, Supervisor} = erlmcp_sup:start_link(),
@@ -70,5 +73,11 @@ supervisor_children_test() ->
             lists:sort([Id || {Id, _Pid, worker, _Modules} <- Children])
         )
     after
-        exit(Supervisor, shutdown)
+        Monitor = erlang:monitor(process, Supervisor),
+        exit(Supervisor, shutdown),
+        receive
+            {'DOWN', Monitor, process, Supervisor, _Reason} -> ok
+        after 1000 ->
+            ?assert(false)
+        end
     end.
