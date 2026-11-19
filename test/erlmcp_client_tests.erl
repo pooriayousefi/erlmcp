@@ -294,6 +294,122 @@ call_tool_preserves_multi_round_trip_fields_test() ->
         end
     ).
 
+call_tool_input_handler_completes_round_trip_test() ->
+    Parent = self(),
+    InputRequired = #{
+        <<"resultType">> => <<"input_required">>,
+        <<"inputRequests">> => [#{<<"id">> => <<"approval">>}],
+        <<"requestState">> => <<"state-round-1">>,
+        <<"_meta">> => server_meta()
+    },
+    Complete = #{
+        <<"resultType">> => <<"complete">>,
+        <<"content">> => [#{<<"type">> => <<"text">>,
+                              <<"text">> => <<"finished">>}],
+        <<"isError">> => false,
+        <<"_meta">> => server_meta()
+    },
+    with_connection(
+        fun(Request) ->
+            Count = case get(round_trip_count) of
+                undefined -> 1;
+                N -> N + 1
+            end,
+            put(round_trip_count, Count),
+            Parent ! {round_trip_request, Count, Request},
+            case Count of
+                1 -> jsonrpc_response(Request, InputRequired);
+                2 -> jsonrpc_response(Request, Complete)
+            end
+        end,
+        fun(Connection) ->
+            Handler = fun(Requests, Context) ->
+                ?assertEqual([#{<<"id">> => <<"approval">>}], Requests),
+                ?assertEqual(<<"interactive-tool">>, maps:get(tool_name, Context)),
+                ?assertEqual(#{<<"x">> => 1}, maps:get(arguments, Context)),
+                ?assertEqual(<<"state-round-1">>, maps:get(request_state, Context)),
+                ?assertEqual(1, maps:get(round, Context)),
+                {ok, [#{<<"id">> => <<"approval">>,
+                        <<"value">> => true}]}
+            end,
+            ?assertEqual(
+                {ok, Complete},
+                erlmcp_client:call_tool(
+                    Connection, <<"interactive-tool">>, #{<<"x">> => 1},
+                    #{input_handler => Handler}
+                )
+            ),
+            receive
+                {round_trip_request, 1, First} ->
+                    FirstParams = maps:get(<<"params">>, First),
+                    ?assertNot(maps:is_key(<<"inputResponses">>, FirstParams))
+            after 1000 -> ?assert(false)
+            end,
+            receive
+                {round_trip_request, 2, Second} ->
+                    SecondParams = maps:get(<<"params">>, Second),
+                    ?assertEqual(#{<<"x">> => 1},
+                                 maps:get(<<"arguments">>, SecondParams)),
+                    ?assertEqual(
+                        [#{<<"id">> => <<"approval">>, <<"value">> => true}],
+                        maps:get(<<"inputResponses">>, SecondParams)
+                    ),
+                    ?assertEqual(
+                        <<"state-round-1">>,
+                        maps:get(<<"requestState">>, SecondParams)
+                    ),
+                    ?assert(is_integer(maps:get(<<"id">>, Second)))
+            after 1000 -> ?assert(false)
+            end
+        end
+    ).
+
+call_tool_input_handler_error_test() ->
+    InputRequired = #{
+        <<"resultType">> => <<"input_required">>,
+        <<"inputRequests">> => [#{<<"id">> => <<"approval">>}],
+        <<"_meta">> => server_meta()
+    },
+    with_connection(
+        fun(Request) -> jsonrpc_response(Request, InputRequired) end,
+        fun(Connection) ->
+            ?assertEqual(
+                {error, {input_handler_error, denied}},
+                erlmcp_client:call_tool(
+                    Connection, <<"interactive-tool">>, #{},
+                    #{input_handler => fun(_Requests, _Context) ->
+                        {error, denied}
+                    end}
+                )
+            )
+        end
+    ).
+
+call_tool_input_round_limit_test() ->
+    InputRequired = #{
+        <<"resultType">> => <<"input_required">>,
+        <<"inputRequests">> => [#{<<"id">> => <<"again">>}],
+        <<"requestState">> => <<"state">>,
+        <<"_meta">> => server_meta()
+    },
+    with_connection(
+        fun(Request) -> jsonrpc_response(Request, InputRequired) end,
+        fun(Connection) ->
+            ?assertEqual(
+                {error, max_input_rounds_exceeded},
+                erlmcp_client:call_tool(
+                    Connection, <<"interactive-tool">>, #{},
+                    #{
+                        max_input_rounds => 1,
+                        input_handler => fun(_Requests, _Context) ->
+                            {ok, [#{<<"value">> => true}]}
+                        end
+                    }
+                )
+            )
+        end
+    ).
+
 call_tool_invalid_arguments_test() ->
     ?assertEqual(
         {error, invalid_arguments},
