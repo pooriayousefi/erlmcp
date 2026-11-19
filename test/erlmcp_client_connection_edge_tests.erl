@@ -1,0 +1,183 @@
+%%--------------------------------------------------------------------
+%% @doc Additional EUnit coverage for client-connection failure paths.
+%% @end
+%%--------------------------------------------------------------------
+-module(erlmcp_client_connection_edge_tests).
+
+-include_lib("eunit/include/eunit.hrl").
+
+invalid_start_options_test() ->
+    {ok, Transport} = start_transport(),
+    ?assertMatch(
+        {error, _},
+        erlmcp_client_connection:start_link(
+            Transport,
+            #{request_timeout => 0}
+        )
+    ),
+    exit(Transport, kill).
+
+invalid_max_pending_test() ->
+    {ok, Transport} = start_transport(),
+    ?assertMatch(
+        {error, _},
+        erlmcp_client_connection:start_link(
+            Transport,
+            #{max_pending => 0}
+        )
+    ),
+    exit(Transport, kill).
+
+invalid_request_test() ->
+    with_connection(fun(Connection, _Transport) ->
+        ?assertEqual(
+            {error, invalid_request},
+            gen_server:call(Connection, {request, #{}}, 1000)
+        )
+    end).
+
+transport_closed_test() ->
+    with_pending_request(fun(Connection, Transport, Caller) ->
+        Connection ! {erlmcp_transport, Transport, closed},
+        receive
+            {caller_result, {error, transport_closed}} -> ok
+        after 1000 ->
+            ?assert(false)
+        end,
+        exit(Caller, kill)
+    end).
+
+transport_process_down_test() ->
+    with_pending_request(fun(Connection, Transport, Caller) ->
+        exit(Transport, kill),
+        receive
+            {caller_result, {error, {transport_down, transport_terminated}}} -> ok
+        after 1000 ->
+            ?assert(false)
+        end,
+        ?assert(is_process_alive(Connection)),
+        exit(Caller, kill)
+    end).
+
+unmatched_response_is_ignored_test() ->
+    with_pending_request(fun(Connection, Transport, Caller) ->
+        Connection ! {
+            erlmcp_transport,
+            Transport,
+            {data, response(999)}
+        },
+        ?assert(is_process_alive(Connection)),
+        Connection ! {
+            erlmcp_transport,
+            Transport,
+            {data, response(7)}
+        },
+        receive
+            {caller_result, Response} ->
+                ?assertEqual(response(7), Response)
+        after 1000 ->
+            ?assert(false)
+        end,
+        exit(Caller, kill)
+    end).
+
+caller_exit_cleans_pending_test() ->
+    with_connection(fun(Connection, _Transport) ->
+        Caller = spawn(fun() ->
+            gen_server:call(Connection, {request, request(8)}, 5000)
+        end),
+        wait_for_sent(),
+        exit(Caller, kill),
+        %% A subsequent request with a different ID must still be accepted.
+        Parent = self(),
+        spawn(fun() ->
+            Parent ! {second_result, gen_server:call(
+                Connection, {request, request(9)}, 1000
+            )}
+        end),
+        wait_for_sent(),
+        Connection ! {
+            erlmcp_transport,
+            transport_pid(Connection),
+            {data, response(9)}
+        },
+        receive
+            {second_result, Result} ->
+                ?assertEqual(response(9), Result)
+        after 1000 ->
+            ?assert(false)
+        end
+    end).
+
+with_pending_request(Test) ->
+    Parent = self(),
+    {ok, Transport} = start_transport(),
+    {ok, Connection} = erlmcp_client_connection:start_link(
+        Transport,
+        #{request_timeout => 3000}
+    ),
+    Caller = spawn(fun() ->
+        Result = gen_server:call(Connection, {request, request(7)}, 4000),
+        Parent ! {caller_result, Result}
+    end),
+    receive
+        {transport_sent, Connection, _Request} -> ok
+    after 1000 ->
+        ?assert(false)
+    end,
+    try
+        Test(Connection, Transport, Caller)
+    after
+        catch erlmcp_client_connection:stop(Connection),
+        catch exit(Transport, kill)
+    end.
+
+with_connection(Test) ->
+    {ok, Transport} = start_transport(),
+    {ok, Connection} = erlmcp_client_connection:start_link(Transport, #{}),
+    try
+        Test(Connection, Transport)
+    after
+        catch erlmcp_client_connection:stop(Connection),
+        catch exit(Transport, kill)
+    end.
+
+start_transport() ->
+    Parent = self(),
+    {ok, spawn(fun() -> transport_loop(Parent) end)}.
+
+transport_loop(Parent) ->
+    receive
+        {erlmcp_client_connection, Connection, {send, Request}} ->
+            Parent ! {transport_sent, Connection, Request},
+            transport_loop(Parent);
+        _ ->
+            transport_loop(Parent)
+    end.
+
+wait_for_sent() ->
+    receive
+        {transport_sent, _Connection, _Request} -> ok
+    after 1000 ->
+        ?assert(false)
+    end.
+
+transport_pid(_Connection) ->
+    %% Test transport messages are authenticated by the transport PID;
+    %% this helper is replaced by the captured PID in each fixture.
+    erlang:error(unused).
+
+request(Id) ->
+    #{
+        <<"jsonrpc">> => <<"2.0">>,
+        <<"id">> => Id,
+        <<"method">> => <<"test/method">>,
+        <<"params">> => #{}
+    }.
+
+response(Id) ->
+    #{
+        <<"jsonrpc">> => <<"2.0">>,
+        <<"id">> => Id,
+        <<"result">> => #{<<"ok">> => true}
+    }.
