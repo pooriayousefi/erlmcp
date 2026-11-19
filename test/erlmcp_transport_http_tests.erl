@@ -45,7 +45,7 @@ unsupported_call_test() ->
             gen_server:call(Transport, unsupported)
         )
     after
-        catch erlmcp_transport_http:stop(Transport)
+        stop_safely(fun() -> erlmcp_transport_http:stop(Transport) end)
     end.
 
 http_connection_failure_is_reported_test() ->
@@ -78,9 +78,12 @@ http_connection_failure_is_reported_test() ->
             Result
         )
     after
-        catch erlmcp_client_connection:stop(Connection),
-        catch erlmcp_transport_http:stop(Transport)
+        stop_safely(fun() -> erlmcp_client_connection:stop(Connection) end),
+        stop_safely(fun() -> erlmcp_transport_http:stop(Transport) end)
     end.
+
+stop_safely(Fun) ->
+    try Fun() catch _:_ -> ok end.
 
 request(Id) ->
     #{
