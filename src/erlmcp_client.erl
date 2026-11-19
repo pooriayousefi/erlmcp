@@ -165,13 +165,6 @@ call_tool_round(
             case send_request(Connection, Request, Timeout) of
                 {ok, Result} ->
                     case validate_tool_call_result(Result) of
-                        {ok, #{<<"resultType">> := <<"input_required">>}}
-                                when Round =:= 0 ->
-                            maybe_resolve_input(
-                                Connection, Name, Arguments, Options,
-                                OptionalFields, Result, Deadline,
-                                MaxRounds, Round
-                            );
                         {ok, #{<<"resultType">> := <<"input_required">>}} ->
                             maybe_resolve_input(
                                 Connection, Name, Arguments, Options,
