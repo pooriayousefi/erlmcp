@@ -1,0 +1,35 @@
+{application, erlmcp,
+ [
+  {description, "Stateless MCP client and server for Erlang/OTP (protocol 2026-07-28)"},
+  {vsn, "0.1.0"},
+  {registered, [
+      erlmcp_sup,
+      erlmcp_tool_registry,
+      erlmcp_tool_executor
+  ]},
+  {mod, {erlmcp_app, []}},
+  {applications, [
+      kernel,
+      stdlib,
+      inets,
+      ssl
+  ]},
+  {env, []},
+  {modules, [
+      erlmcp,
+      erlmcp_app,
+      erlmcp_sup,
+      erlmcp_jsonrpc,
+      erlmcp_protocol,
+      erlmcp_client,
+      erlmcp_client_connection,
+      erlmcp_server,
+      erlmcp_tool_registry,
+      erlmcp_tool_executor,
+      erlmcp_transport_stdio,
+      erlmcp_transport_http,
+      erlmcp_http_handler
+  ]},
+  {licenses, ["Apache-2.0"]},
+  {links, []}
+ ]}.
