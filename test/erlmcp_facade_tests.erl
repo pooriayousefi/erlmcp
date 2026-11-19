@@ -52,6 +52,7 @@ registry_facade_test_() ->
 
 application_callback_test() ->
     {ok, Supervisor} = erlmcp_app:start(normal, []),
+    unlink(Supervisor),
     Monitor = erlang:monitor(process, Supervisor),
     ?assert(is_process_alive(Supervisor)),
     ?assertEqual(ok, erlmcp_app:stop([])),
