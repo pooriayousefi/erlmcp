@@ -8,17 +8,42 @@
 
 invalid_start_options_test() ->
     Transport = start_transport(),
-    ?assertMatch({error, _}, erlmcp_client_connection:start_link(
-        Transport, #{request_timeout => 0}
-    )),
-    exit(Transport, kill).
+    try
+        ?assertEqual(
+            {error, invalid_options},
+            start_with_invalid_options(Transport, #{request_timeout => 0})
+        )
+    after
+        cleanup(fun() -> exit(Transport, kill) end)
+    end.
 
 invalid_max_pending_test() ->
     Transport = start_transport(),
-    ?assertMatch({error, _}, erlmcp_client_connection:start_link(
-        Transport, #{max_pending => 0}
-    )),
-    exit(Transport, kill).
+    try
+        ?assertEqual(
+            {error, invalid_options},
+            start_with_invalid_options(Transport, #{max_pending => 0})
+        )
+    after
+        cleanup(fun() -> exit(Transport, kill) end)
+    end.
+
+%% gen_server:start_link/3 links the caller to the child before init/1
+%% rejects its options. Trap and consume that expected EXIT signal so an
+%% intentional startup failure does not terminate the EUnit test process.
+start_with_invalid_options(Transport, Options) ->
+    PreviousTrapExit = process_flag(trap_exit, true),
+    try
+        Result = erlmcp_client_connection:start_link(Transport, Options),
+        receive
+            {'EXIT', _Pid, invalid_options} ->
+                Result
+        after 1000 ->
+            ?assert(false)
+        end
+    after
+        process_flag(trap_exit, PreviousTrapExit)
+    end.
 
 invalid_request_test() ->
     with_connection(fun(Connection, _Transport) ->
